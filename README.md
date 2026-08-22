@@ -5,12 +5,10 @@ FastAPI service for candidates, jobs, applications, growth plans, networking eve
 ## Run
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-uvicorn app.main:app --reload --port 4000
+npm run dev
 ```
+
+Creates the virtualenv, installs Python deps, copies `.env` if needed, then starts the API.
 
 API docs: http://localhost:4000/docs
 
