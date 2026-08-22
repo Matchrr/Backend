@@ -8,11 +8,12 @@ class Settings(BaseSettings):
     app_env: str = "development"
     api_prefix: str = "/api"
     cors_origins: str = "http://localhost:3000"
+    port: int = 4000
 
     supabase_url: str = ""
     supabase_service_role_key: str = ""
 
-    ai_service_url: str = "http://localhost:8001"
+    ai_service_url: str = "http://localhost:8080"
 
     serpapi_api_key: str = ""
     nutrient_api_key: str = ""
