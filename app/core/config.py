@@ -1,0 +1,32 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    app_name: str = "Matchr Backend"
+    app_env: str = "development"
+    api_prefix: str = "/api"
+    cors_origins: str = "http://localhost:3000"
+
+    supabase_url: str = ""
+    supabase_service_role_key: str = ""
+
+    ai_service_url: str = "http://localhost:8001"
+
+    serpapi_api_key: str = ""
+    nutrient_api_key: str = ""
+    kong_gateway_url: str = ""
+    namecom_api_key: str = ""
+    namecom_username: str = ""
+    linkedin_client_id: str = ""
+    linkedin_client_secret: str = ""
+    gmail_client_id: str = ""
+    gmail_client_secret: str = ""
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+
+settings = Settings()
