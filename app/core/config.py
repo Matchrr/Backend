@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     api_prefix: str = "/api"
     cors_origins: str = "http://localhost:3000"
+    frontend_url: str = "http://localhost:3000"
     port: int = 4000
 
     supabase_url: str = ""
@@ -22,6 +23,10 @@ class Settings(BaseSettings):
     namecom_username: str = ""
     linkedin_client_id: str = ""
     linkedin_client_secret: str = ""
+    linkedin_redirect_uri: str = "http://localhost:4000/api/integrations/linkedin/callback"
+    # Optional DMA Member Snapshot scope, e.g. r_dma_portability_3rd_party.
+    # Leave empty unless the LinkedIn app has Member Data Portability enabled.
+    linkedin_dma_scope: str = ""
     gmail_client_id: str = ""
     gmail_client_secret: str = ""
 

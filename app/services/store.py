@@ -62,6 +62,7 @@ class Store:
             self._activity: list[ActivityEntry] = []
             self._last_sync: str | None = None
             self._sequence = 0
+            self._linkedin_tokens: dict[str, object] | None = None
             self._rebuild_index()
 
     # ----- activity --------------------------------------------------------
@@ -105,20 +106,48 @@ class Store:
         with self._lock:
             self.candidate = candidate
             self._dossiers.clear()
-            sources = ", ".join(candidate.grounding_sources) or "unknown source"
-            self._log(
-                "grounded",
-                "Ground Truth Profile updated",
-                f"{len(candidate.skills)} verified skills via {sources}",
-                tone="positive",
-            )
+            if candidate.grounded:
+                sources = ", ".join(candidate.grounding_sources) or "unknown source"
+                self._log(
+                    "grounded",
+                    "Ground Truth Profile updated",
+                    f"{len(candidate.skills)} verified skills via {sources}",
+                    tone="positive",
+                )
+            else:
+                self._log(
+                    "grounded",
+                    "LinkedIn identity imported",
+                    candidate.full_name or candidate.email,
+                    tone="info",
+                )
             return self.candidate
+
+    def set_linkedin_tokens(self, tokens: dict[str, object]) -> None:
+        with self._lock:
+            self._linkedin_tokens = {
+                "access_token": tokens.get("access_token"),
+                "refresh_token": tokens.get("refresh_token"),
+                "expires_in": tokens.get("expires_in"),
+                "scope": tokens.get("scope"),
+            }
+
+    def linkedin_access_token(self) -> str | None:
+        with self._lock:
+            if not self._linkedin_tokens:
+                return None
+            token = self._linkedin_tokens.get("access_token")
+            return token if isinstance(token, str) and token else None
 
     def update_candidate(self, **fields: object) -> Candidate:
         with self._lock:
             previous_target = self.candidate.target_title
             for key, value in fields.items():
                 if value is not None and hasattr(self.candidate, key):
+                    if key == "location" and isinstance(value, str):
+                        from app.services.career_parse import city_only_location
+
+                        value = city_only_location(value) or value
                     setattr(self.candidate, key, value)
             self._dossiers.clear()
             if self.candidate.target_title and self.candidate.target_title != previous_target:
@@ -456,13 +485,23 @@ class Store:
     def _next_action(self, strong: int) -> NextAction:
         """The single highest-leverage thing to do next, given current state."""
         if not self.candidate.grounded:
+            if self.candidate.linkedin_connected:
+                return NextAction(
+                    label="Finish grounding",
+                    description=(
+                        "LinkedIn shared your identity. Drop a LinkedIn PDF or resume so Matchr "
+                        "can score jobs against your actual experience."
+                    ),
+                    href="/profile?setup=1",
+                    cta="Add work history",
+                )
             return NextAction(
                 label="Ground your profile",
                 description=(
                     "Connect LinkedIn or upload a resume. Nothing can rank, tailor, or draft "
                     "until Matchr has verified facts to work from."
                 ),
-                href="/profile",
+                href="/profile?setup=1",
                 cta="Get grounded",
             )
         if not self.candidate.target_title:

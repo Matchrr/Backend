@@ -965,6 +965,8 @@ DEMO_LINKEDIN_PROFILE: dict[str, Any] = {
     "full_name": "Alex Rivera",
     "headline": "Backend Engineer | Python, FastAPI, PostgreSQL | Building payment systems",
     "location": "New York, NY",
+    "email": "alex.rivera@example.com",
+    "picture": None,
     "summary": (
         "Backend engineer with 5 years building transactional services for fintech and "
         "marketplace products. I care about clean REST API design, data correctness, and "
@@ -1023,6 +1025,18 @@ DEMO_LINKEDIN_PROFILE: dict[str, Any] = {
     ],
     "education": ["B.S. Computer Science, Rutgers University (2020)"],
     "certifications": [],
+    "volunteering": [
+        {
+            "title": "Mentor",
+            "company": "CodeNext NYC",
+            "start_date": "2022",
+            "end_date": "Present",
+            "bullets": [
+                "Mentor high-school students building their first Python APIs during weekend workshops.",
+            ],
+        }
+    ],
+    "projects": ["Settlement replay tool — local FastAPI harness for idempotent payment retries"],
 }
 
 DEMO_RESUME_TEXT = """Alex Rivera — Backend Engineer
