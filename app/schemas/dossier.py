@@ -32,3 +32,6 @@ class Dossier(BaseModel):
     ats_answers: list[AtsAnswer] = Field(default_factory=list)
     grounding: GroundingCheck
     generated_at: str
+    generation_source: str | None = None
+    retrieved_chunk_ids: list[int] = Field(default_factory=list)
+    cover_letter_id: int | None = None

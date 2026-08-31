@@ -1,13 +1,15 @@
 """In-memory application state for the MVP.
 
-A single-candidate store standing in for Supabase + pgvector. Every read path
-that will eventually hit the database is isolated behind this class, so the
-routes do not change when persistence lands.
+A single live candidate in RAM, with the Ground Truth Profile persisted per
+authenticated user (see profile_vault) so login restores LinkedIn/resume
+grounding. Job corpus stays shared. Routes keep talking to this class.
 """
 
 from __future__ import annotations
 
+import logging
 import threading
+import time
 from datetime import datetime, timezone
 
 from app.data.seed import EVENT_SEED, JOB_SEED
@@ -28,8 +30,11 @@ from app.schemas.overview import (
 )
 from app.services import dossier as dossier_service
 from app.services import growth as growth_service
+from app.services import profile_vault
 from app.services.grounding import CANDIDATE_ID
 from app.services.matching import CorpusIndex, extract_skills, score_event, score_job
+
+logger = logging.getLogger(__name__)
 
 MAX_TARGETS = 5
 STRONG_MATCH = 75
@@ -63,6 +68,9 @@ class Store:
             self._last_sync: str | None = None
             self._sequence = 0
             self._linkedin_tokens: dict[str, object] | None = None
+            self._live_active = False
+            self._match_filters: dict[str, object] = {}
+            self._profile_revision_id: int | None = None
             self._rebuild_index()
 
     # ----- activity --------------------------------------------------------
@@ -104,9 +112,11 @@ class Store:
 
     def set_candidate(self, candidate: Candidate) -> Candidate:
         with self._lock:
+            self._stamp_owner_locked(candidate)
             self.candidate = candidate
             self._dossiers.clear()
             if candidate.grounded:
+                self._profile_revision_id = int(time.time() * 1000)
                 sources = ", ".join(candidate.grounding_sources) or "unknown source"
                 self._log(
                     "grounded",
@@ -121,6 +131,7 @@ class Store:
                     candidate.full_name or candidate.email,
                     tone="info",
                 )
+            self._persist_locked()
             return self.candidate
 
     def set_linkedin_tokens(self, tokens: dict[str, object]) -> None:
@@ -131,6 +142,7 @@ class Store:
                 "expires_in": tokens.get("expires_in"),
                 "scope": tokens.get("scope"),
             }
+            self._persist_locked()
 
     def linkedin_access_token(self) -> str | None:
         with self._lock:
@@ -138,6 +150,44 @@ class Store:
                 return None
             token = self._linkedin_tokens.get("access_token")
             return token if isinstance(token, str) and token else None
+
+    def bind_identity(
+        self,
+        user_id: str,
+        email: str | None = None,
+        full_name: str | None = None,
+    ) -> Candidate:
+        """Attach the live candidate record to a Xano user and restore their profile.
+
+        The job corpus stays shared. Switching accounts flushes RAM (after saving
+        the previous user) and loads the incoming user's last grounded profile.
+        """
+        with self._lock:
+            current_id = self.candidate.id
+            if current_id not in {CANDIDATE_ID, user_id}:
+                self._persist_locked()
+                self.reset()
+                self._hydrate_locked(user_id)
+            elif current_id == CANDIDATE_ID:
+                self._hydrate_locked(user_id)
+            self.candidate.id = user_id
+            if email:
+                self.candidate.email = email
+            if full_name and not self.candidate.full_name:
+                self.candidate.full_name = full_name
+            return self.candidate
+
+    def reset_profile(self) -> Candidate:
+        """Wipe this account's Ground Truth Profile (RAM + durable copy)."""
+        with self._lock:
+            user_id = self.candidate.id
+            email = self.candidate.email
+            profile_vault.delete(user_id)
+            self.reset()
+            if profile_vault.is_persisted_user(user_id):
+                self.candidate.id = user_id
+                self.candidate.email = email
+            return self.candidate
 
     def update_candidate(self, **fields: object) -> Candidate:
         with self._lock:
@@ -157,7 +207,34 @@ class Store:
                     "Matches, growth plan, and events re-ranked against the new goal",
                     tone="brand",
                 )
+            self._persist_locked()
             return self.candidate
+
+    def _stamp_owner_locked(self, candidate: Candidate) -> None:
+        owner_id = self.candidate.id
+        if not profile_vault.is_persisted_user(owner_id):
+            return
+        candidate.id = owner_id
+        if not candidate.email:
+            candidate.email = self.candidate.email
+
+    def _hydrate_locked(self, user_id: str) -> None:
+        saved = profile_vault.load(user_id)
+        if saved is None:
+            return
+        self.candidate = saved.candidate
+        self._linkedin_tokens = saved.linkedin_tokens
+        self._profile_revision_id = saved.profile_revision_id
+
+    def _persist_locked(self) -> None:
+        try:
+            profile_vault.save(
+                self.candidate,
+                linkedin_tokens=self._linkedin_tokens,
+                profile_revision_id=self._profile_revision_id,
+            )
+        except Exception:
+            logger.exception("Could not persist profile for user %s", self.candidate.id)
 
     # ----- jobs ------------------------------------------------------------
 
@@ -186,6 +263,7 @@ class Store:
             job_company=job.company,
             job_description=job.description or "",
             index=self._index,
+            embedding_similarity=record.get("similarity") if "similarity" in record else None,
         )
         job.scorecard = FitScorecard(
             match_percent=result.match_percent,
@@ -198,7 +276,12 @@ class Store:
 
     def job_matches(self, limit: int = 10) -> list[Job]:
         with self._lock:
-            jobs = [self._score(record) for record in self._jobs.values()]
+            records = [
+                record
+                for record in self._jobs.values()
+                if not self._live_active or record.get("_origin") == "live"
+            ]
+            jobs = [self._score(record) for record in records]
             if self.candidate.grounded:
                 jobs.sort(key=lambda job: -(job.scorecard.match_percent if job.scorecard else 0))
             return jobs[:limit]
@@ -209,8 +292,9 @@ class Store:
             return self._score(record) if record else None
 
     def sync_jobs(self) -> dict[str, object]:
-        """Placeholder for the SerpApi harvest; re-scores the current corpus."""
+        """Seed-corpus fallback when live harvest is unavailable."""
         with self._lock:
+            self._live_active = False
             self._last_sync = _now()
             self._rebuild_index()
             self._log(
@@ -224,6 +308,71 @@ class Store:
     @property
     def last_sync(self) -> str | None:
         return self._last_sync
+
+    @property
+    def match_filters(self) -> dict[str, object]:
+        return dict(self._match_filters)
+
+    def set_match_filters(self, **fields: object) -> None:
+        with self._lock:
+            for key, value in fields.items():
+                if value is None:
+                    self._match_filters.pop(key, None)
+                else:
+                    self._match_filters[key] = value
+
+    def mark_live_sync(self, stats: dict[str, object]) -> dict[str, object]:
+        with self._lock:
+            self._live_active = True
+            self._last_sync = str(stats.get("at") or _now())
+            synced = int(stats.get("synced") or 0)
+            harvested = int(stats.get("harvested_queries") or 0)
+            cached = int(stats.get("cached_queries") or 0)
+            warning = stats.get("warning")
+            detail = f"{harvested} live searches · {cached} cached"
+            if warning:
+                detail = f"{detail} · {warning}"
+            self._log(
+                "sync",
+                f"Harvested {synced} live roles" if synced else "Refreshed live job catalog",
+                detail,
+                tone="info",
+            )
+            payload = dict(stats)
+            payload["at"] = self._last_sync
+            payload["source"] = "xano"
+            return payload
+
+    def ingest_and_score_live_jobs(self, matches: list[dict], limit: int = 10) -> list[Job]:
+        with self._lock:
+            records: list[dict] = []
+            for item in matches:
+                job_id = str(item.get("id") or item.get("external_id") or "").strip()
+                title = str(item.get("title") or "").strip()
+                company = str(item.get("company") or "").strip()
+                if not job_id or not title:
+                    continue
+                record = {
+                    "id": job_id,
+                    "title": title,
+                    "company": company,
+                    "location": item.get("location"),
+                    "source": item.get("source"),
+                    "posted_at": item.get("posted_at"),
+                    "salary": item.get("salary"),
+                    "apply_url": item.get("apply_url"),
+                    "description": item.get("description"),
+                    "similarity": item.get("similarity"),
+                    "xano_id": item.get("xano_id"),
+                    "_origin": "live",
+                }
+                self._jobs[job_id] = record
+                records.append(record)
+            self._live_active = True
+            self._rebuild_index()
+            jobs = [self._score(record) for record in records]
+            jobs.sort(key=lambda job: -(job.scorecard.match_percent if job.scorecard else 0))
+            return jobs[:limit]
 
     # ----- targeting / applications ---------------------------------------
 
@@ -368,6 +517,65 @@ class Store:
                 tone="positive" if built.grounding.passed else "danger",
             )
             return built
+
+    def profile_revision_id(self) -> int | None:
+        return self._profile_revision_id
+
+    def job_xano_id(self, job_id: str) -> int | None:
+        with self._lock:
+            record = self._jobs.get(job_id) or {}
+            raw = record.get("xano_id")
+            try:
+                return int(raw) if raw is not None else None
+            except (TypeError, ValueError):
+                return None
+
+    def profile_payload(self) -> dict:
+        candidate = self.candidate
+        return {
+            "full_name": candidate.full_name,
+            "summary": candidate.summary,
+            "skills": list(candidate.skills),
+            "experience": [role.model_dump() for role in candidate.experience],
+            "volunteering": [role.model_dump() for role in candidate.volunteering],
+            "projects": list(candidate.projects),
+            "education": list(candidate.education),
+            "certifications": list(candidate.certifications),
+        }
+
+    def attach_rag_cover_letter(self, job_id: str, rag: dict) -> Dossier | None:
+        """Replace the template letter when RAG output still passes grounding."""
+        cover_letter = str(rag.get("cover_letter") or "").strip()
+        if not cover_letter:
+            return None
+        with self._lock:
+            existing = self._dossiers.get(job_id)
+            if existing is None:
+                return None
+            claims = [bullet.tailored for bullet in existing.tailored_bullets]
+            claims += [dossier_service._affirmative_text(cover_letter)]
+            claims += [dossier_service._affirmative_text(answer.answer) for answer in existing.ats_answers]
+            grounding = dossier_service.verify_grounding(self.candidate, claims)
+            if not grounding.passed:
+                return existing
+            retrieved = rag.get("retrieved_chunk_ids") or []
+            chunk_ids = [int(item) for item in retrieved if str(item).isdigit() or isinstance(item, int)]
+            cover_letter_id = rag.get("cover_letter_id")
+            try:
+                stored_id = int(cover_letter_id) if cover_letter_id is not None else None
+            except (TypeError, ValueError):
+                stored_id = None
+            updated = existing.model_copy(
+                update={
+                    "cover_letter": cover_letter,
+                    "grounding": grounding,
+                    "generation_source": rag.get("generation_source"),
+                    "retrieved_chunk_ids": chunk_ids,
+                    "cover_letter_id": stored_id,
+                }
+            )
+            self._dossiers[job_id] = updated
+            return updated
 
     def get_dossier(self, job_id: str) -> Dossier | None:
         with self._lock:

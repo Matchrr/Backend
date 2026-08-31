@@ -6,3 +6,5 @@ httpx>=0.28.0
 python-multipart>=0.0.17
 supabase>=2.10.0
 pypdf>=5.1.0
+pytest>=8.0.0
+freezegun>=1.4.0

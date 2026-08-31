@@ -138,9 +138,13 @@ def _coverage(matched_emphasis: float, missing_emphasis: float) -> float:
 
 def _blend(skill_coverage: float, similarity: float, affinity: float) -> int:
     """Weighted blend, then a mild curve so realistic fits land in the 60–95 band."""
+    return _blend_components(skill_coverage, min(similarity * _SIMILARITY_SCALE, 1.0), affinity)
+
+
+def _blend_components(skill_coverage: float, similarity: float, affinity: float) -> int:
     raw = (
         0.52 * skill_coverage
-        + 0.33 * min(similarity * _SIMILARITY_SCALE, 1.0)
+        + 0.33 * max(0.0, min(similarity, 1.0))
         + 0.15 * affinity
     )
     curved = raw**0.75
@@ -202,6 +206,7 @@ def score_job(
     job_company: str,
     job_description: str,
     index: CorpusIndex,
+    embedding_similarity: float | None = None,
 ) -> MatchResult:
     job_text = f"{job_title} {job_company} {job_description}"
     emphasis = skill_emphasis(job_text)
@@ -221,11 +226,17 @@ def score_job(
     missing_emphasis = sum(emphasis[skill] for skill in missing_tech)
     skill_coverage = _coverage(matched_emphasis, missing_emphasis)
 
-    similarity = cosine(index.vector(profile_text), index.vector(job_text))
+    lexical = cosine(index.vector(profile_text), index.vector(job_text))
+    similarity = embedding_similarity if embedding_similarity is not None else lexical
     affinity = title_affinity(target_title, job_title)
+    scaled = (
+        similarity
+        if embedding_similarity is not None
+        else min(similarity * _SIMILARITY_SCALE, 1.0)
+    )
 
     return MatchResult(
-        match_percent=_blend(skill_coverage, similarity, affinity),
+        match_percent=_blend_components(skill_coverage, scaled, affinity),
         similarity=round(similarity, 4),
         matching_skills=matching_skills[:8],
         missing_tech=missing_tech[:6],

@@ -12,6 +12,7 @@ from app.services.grounding import (
     overlay_document,
 )
 from app.services import nutrient as nutrient_service
+from app.services.profile_index import commit_grounded
 from app.services.store import store
 
 router = APIRouter(prefix="/candidates", tags=["candidates"])
@@ -40,8 +41,8 @@ def ground_with_linkedin() -> Candidate:
     """
     incoming = ground_from_linkedin(DEMO_LINKEDIN_PROFILE, store.candidate.target_title)
     if store.candidate.grounded:
-        return store.set_candidate(merge_profiles(store.candidate, incoming))
-    return store.set_candidate(incoming)
+        return commit_grounded(merge_profiles(store.candidate, incoming))
+    return commit_grounded(incoming)
 
 
 @router.post("/resume", response_model=Candidate)
@@ -59,8 +60,8 @@ async def upload_resume(file: UploadFile = File(...)) -> Candidate:
         )
 
     if store.candidate.grounded or store.candidate.linkedin_connected:
-        return store.set_candidate(overlay_document(store.candidate, incoming))
-    return store.set_candidate(incoming)
+        return commit_grounded(overlay_document(store.candidate, incoming))
+    return commit_grounded(incoming)
 
 
 def _ingest_document(payload: bytes, filename: str) -> Candidate:
@@ -113,5 +114,4 @@ def _ingest_document(payload: bytes, filename: str) -> Candidate:
 
 @router.post("/reset", response_model=Candidate)
 def reset_candidate() -> Candidate:
-    store.reset()
-    return store.candidate
+    return store.reset_profile()

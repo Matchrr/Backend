@@ -14,7 +14,16 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_service_role_key: str = ""
 
+    # User auth lives on Xano (JWT via /auth/signup, /auth/login, /auth/me).
+    # Job-catalog calls stay on ai-service; this URL is only for user identity.
+    xano_api_url: str = ""
+    xano_auth_api_url: str = ""
+    # "" = require auth only when the Authentication endpoints exist on the group.
+    # "true" / "false" force the gate on or off.
+    xano_auth_required: str = ""
+
     ai_service_url: str = "http://localhost:8080"
+    matchr_service_secret: str = "matchr-dev"
 
     serpapi_api_key: str = ""
     nutrient_api_key: str = ""

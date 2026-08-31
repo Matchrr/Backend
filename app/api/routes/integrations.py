@@ -1,13 +1,14 @@
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from app.core.config import settings
 from app.services import linkedin as linkedin_service
 from app.services import nutrient as nutrient_service
-from app.services.grounding import ground_from_linkedin, merge_profiles
+from app.services.grounding import CANDIDATE_ID, ground_from_linkedin, merge_profiles
+from app.services.profile_index import commit_grounded
 from app.services.store import store
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
@@ -91,9 +92,9 @@ def connect_integration(provider: str, payload: ConnectRequest) -> list[Integrat
 
 
 @router.get("/linkedin/authorize", response_model=LinkedInAuthorizeResponse)
-def linkedin_authorize() -> LinkedInAuthorizeResponse:
+def linkedin_authorize(request: Request) -> LinkedInAuthorizeResponse:
     try:
-        url = linkedin_service.build_authorization_url()
+        url = linkedin_service.build_authorization_url(user_id=_owner_user_id(request))
     except linkedin_service.LinkedInError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return LinkedInAuthorizeResponse(
@@ -116,15 +117,18 @@ def linkedin_callback(
         return _profile_redirect(frontend, "error", reason)
 
     try:
-        payload, tokens = linkedin_service.complete_login(code, state)
+        payload, tokens, owner_id = linkedin_service.complete_login(code, state)
     except linkedin_service.LinkedInError as exc:
         return _profile_redirect(frontend, "error", str(exc))
 
+    if owner_id:
+        store.bind_identity(owner_id)
+
     incoming = ground_from_linkedin(payload, store.candidate.target_title)
     if store.candidate.grounded or store.candidate.linkedin_connected or store.candidate.full_name:
-        store.set_candidate(merge_profiles(store.candidate, incoming))
+        commit_grounded(merge_profiles(store.candidate, incoming))
     else:
-        store.set_candidate(incoming)
+        commit_grounded(incoming)
     store.set_linkedin_tokens(tokens)
 
     status = "imported" if incoming.linkedin_coverage == "profile" else "identity"
@@ -136,3 +140,11 @@ def _profile_redirect(frontend: str, status: str, reason: str | None = None) -> 
     if reason:
         query["reason"] = reason[:180]
     return RedirectResponse(f"{frontend}/profile?{urlencode(query)}", status_code=302)
+
+
+def _owner_user_id(request: Request) -> str | None:
+    user = getattr(request.state, "user", None)
+    user_id = getattr(user, "id", None) or store.candidate.id
+    if not user_id or user_id == CANDIDATE_ID:
+        return None
+    return str(user_id)

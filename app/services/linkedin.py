@@ -55,10 +55,11 @@ class LinkedInError(Exception):
 
 
 class _PendingAuth:
-    __slots__ = ("created_at",)
+    __slots__ = ("created_at", "user_id")
 
-    def __init__(self) -> None:
+    def __init__(self, user_id: str | None = None) -> None:
         self.created_at = time.time()
+        self.user_id = user_id
 
 
 _pending: dict[str, _PendingAuth] = {}
@@ -79,7 +80,7 @@ def requested_scopes() -> list[str]:
     return scopes
 
 
-def build_authorization_url() -> str:
+def build_authorization_url(user_id: str | None = None) -> str:
     if not is_configured():
         raise LinkedInError(
             "LinkedIn is not configured. Set LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET.",
@@ -90,7 +91,7 @@ def build_authorization_url() -> str:
 
     with _lock:
         _evict_expired_locked()
-        _pending[state] = _PendingAuth()
+        _pending[state] = _PendingAuth(user_id=user_id)
 
     params = {
         "response_type": "code",
@@ -102,8 +103,10 @@ def build_authorization_url() -> str:
     return f"{AUTHORIZE_URL}?{urlencode(params)}"
 
 
-def complete_login(code: str | None, state: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Exchange the OAuth code and return (profile_payload, token_bundle)."""
+def complete_login(
+    code: str | None, state: str | None
+) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+    """Exchange the OAuth code and return (profile_payload, token_bundle, owner_user_id)."""
     if not code or not state:
         raise LinkedInError("LinkedIn did not return an authorization code.", code="missing_code")
 
@@ -126,7 +129,7 @@ def complete_login(code: str | None, state: str | None) -> tuple[dict[str, Any],
     if snapshot:
         _merge_snapshot(payload, snapshot)
 
-    return payload, tokens
+    return payload, tokens, pending.user_id
 
 
 def fetch_profile_with_token(access_token: str) -> dict[str, Any]:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
+from app.data.skills import SKILL_ALIASES
 from app.schemas.candidate import Candidate
 from app.schemas.dossier import AtsAnswer, Dossier, GroundingCheck, TailoredBullet
 from app.schemas.job import Job
@@ -111,7 +112,8 @@ def verify_grounding(candidate: Candidate, generated_texts: list[str]) -> Ground
             checked += 1
             if skill.lower() in owned:
                 continue
-            if any(alias in source_text for alias in [skill.lower()]):
+            aliases = [skill.lower(), *(SKILL_ALIASES.get(skill) or [])]
+            if any(alias in source_text for alias in aliases):
                 continue
             rejected.append(skill)
 
