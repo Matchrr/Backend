@@ -14,7 +14,8 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_service_role_key: str = ""
 
-    # User auth lives on Xano (JWT via /auth/signup, /auth/login, /auth/me).
+    # User auth lives on Xano (JWT via /auth/signup, /auth/login, /auth/me,
+    # plus the password-reset endpoints on the Authentication API group).
     # Job-catalog calls stay on ai-service; this URL is only for user identity.
     xano_api_url: str = ""
     xano_auth_api_url: str = ""
@@ -38,6 +39,18 @@ class Settings(BaseSettings):
     linkedin_dma_scope: str = ""
     gmail_client_id: str = ""
     gmail_client_secret: str = ""
+    # Sign in with Google (OpenID). Separate from Gmail send credentials.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:4000/api/auth/google/callback"
+
+    # Catalog / profile tables on the Matchr Xano API group (service key).
+    xano_api_key: str = ""
+
+    aws_region: str = "ca-central-1"
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    matchr_s3_bucket: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

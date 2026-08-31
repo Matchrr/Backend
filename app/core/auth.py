@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import Request
 
 from app.core.config import settings
+from app.services.google_auth import is_configured as google_is_configured
 from app.services.xano_auth import XanoAuthError, XanoUser, endpoints_available, fetch_me, is_configured
 
 _CACHE_TTL_SECONDS = 30.0
@@ -30,6 +31,7 @@ def auth_status() -> dict[str, Any]:
         "configured": configured,
         "available": available,
         "required": _auth_required(configured, available),
+        "google": google_is_configured(),
     }
 
 

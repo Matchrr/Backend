@@ -14,6 +14,7 @@ class JobSyncBody(BaseModel):
     employment_types: list[str] | None = None
     pay_min: float | None = None
     pay_period: str | None = None
+    desired_roles: list[str] | None = None
 
 
 def _split_csv(value: str | None) -> list[str] | None:
@@ -30,6 +31,7 @@ def list_job_matches(
     employment_types: str | None = None,
     pay_min: float | None = None,
     pay_period: str | None = None,
+    desired_roles: str | None = None,
 ) -> list[Job]:
     candidate = store.candidate
     filters = {
@@ -38,6 +40,7 @@ def list_job_matches(
         or store.match_filters.get("employment_types"),
         "pay_min": pay_min if pay_min is not None else store.match_filters.get("pay_min"),
         "pay_period": pay_period or store.match_filters.get("pay_period"),
+        "desired_roles": _split_csv(desired_roles) or store.match_filters.get("desired_roles"),
     }
     if not ai_client.ai_service_reachable() or not candidate.grounded:
         return store.job_matches(limit=limit)
@@ -46,6 +49,7 @@ def list_job_matches(
             {
                 "candidate_id": candidate.id,
                 "target_title": candidate.target_title,
+                "desired_roles": filters.get("desired_roles"),
                 "limit": limit,
                 "profile_text": candidate.profile_text,
                 "skills": candidate.skills,
@@ -77,6 +81,7 @@ def sync_jobs(payload: JobSyncBody | None = Body(default=None)) -> dict[str, obj
         employment_types=body.employment_types,
         pay_min=body.pay_min,
         pay_period=body.pay_period,
+        desired_roles=body.desired_roles,
     )
     if not candidate.target_title or not str(candidate.target_title).strip():
         return store.sync_jobs()
@@ -86,6 +91,7 @@ def sync_jobs(payload: JobSyncBody | None = Body(default=None)) -> dict[str, obj
         stats = ai_client.fanout_jobs(
             {
                 "target_title": candidate.target_title,
+                "desired_roles": body.desired_roles,
                 "location": candidate.location,
                 "top_skill": candidate.skills[0] if candidate.skills else None,
                 "work_modes": body.work_modes,

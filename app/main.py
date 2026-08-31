@@ -28,6 +28,10 @@ _PUBLIC_PATHS = {
     "/api/auth/login",
     "/api/auth/logout",
     "/api/auth/me",
+    "/api/auth/forgot-password",
+    "/api/auth/reset-password",
+    "/api/auth/google/authorize",
+    "/api/auth/google/callback",
     "/api/integrations/linkedin/callback",
 }
 

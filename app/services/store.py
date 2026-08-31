@@ -1,7 +1,7 @@
 """In-memory application state for the MVP.
 
 A single live candidate in RAM, with the Ground Truth Profile persisted per
-authenticated user (see profile_vault) so login restores LinkedIn/resume
+authenticated user (see cloud_profile) so login restores LinkedIn/resume
 grounding. Job corpus stays shared. Routes keep talking to this class.
 """
 
@@ -28,6 +28,7 @@ from app.schemas.overview import (
     PipelineStage,
     ScoreBand,
 )
+from app.services import cloud_profile
 from app.services import dossier as dossier_service
 from app.services import growth as growth_service
 from app.services import profile_vault
@@ -131,7 +132,7 @@ class Store:
                     candidate.full_name or candidate.email,
                     tone="info",
                 )
-            self._persist_locked()
+            self._persist_locked(new_revision=bool(candidate.grounded))
             return self.candidate
 
     def set_linkedin_tokens(self, tokens: dict[str, object]) -> None:
@@ -182,7 +183,7 @@ class Store:
         with self._lock:
             user_id = self.candidate.id
             email = self.candidate.email
-            profile_vault.delete(user_id)
+            cloud_profile.delete(user_id)
             self.reset()
             if profile_vault.is_persisted_user(user_id):
                 self.candidate.id = user_id
@@ -219,20 +220,23 @@ class Store:
             candidate.email = self.candidate.email
 
     def _hydrate_locked(self, user_id: str) -> None:
-        saved = profile_vault.load(user_id)
+        saved = cloud_profile.load(user_id)
         if saved is None:
             return
         self.candidate = saved.candidate
         self._linkedin_tokens = saved.linkedin_tokens
         self._profile_revision_id = saved.profile_revision_id
 
-    def _persist_locked(self) -> None:
+    def _persist_locked(self, *, new_revision: bool = False) -> None:
         try:
-            profile_vault.save(
+            revision_id = cloud_profile.save(
                 self.candidate,
                 linkedin_tokens=self._linkedin_tokens,
                 profile_revision_id=self._profile_revision_id,
+                new_revision=new_revision,
             )
+            if revision_id is not None:
+                self._profile_revision_id = revision_id
         except Exception:
             logger.exception("Could not persist profile for user %s", self.candidate.id)
 
@@ -249,6 +253,7 @@ class Store:
             salary=record.get("salary"),
             apply_url=record.get("apply_url"),
             description=record.get("description"),
+            rank=record.get("rank"),
             targeted=record["id"] in self._targeted,
         )
         if not self.candidate.grounded:
@@ -265,9 +270,15 @@ class Store:
             index=self._index,
             embedding_similarity=record.get("similarity") if "similarity" in record else None,
         )
+        semantic = record.get("semantic_score")
+        ranking_score = record.get("ranking_score")
+        if ranking_score is None and isinstance(semantic, (int, float)):
+            ranking_score = int(round(max(0.0, min(float(semantic), 1.0)) * 100))
         job.scorecard = FitScorecard(
             match_percent=result.match_percent,
             similarity=result.similarity,
+            semantic_score=None if semantic is None else float(semantic),
+            ranking_score=ranking_score,
             matching_skills=result.matching_skills,
             missing_tech=result.missing_tech,
             key_angle=result.key_angle,
@@ -346,7 +357,7 @@ class Store:
     def ingest_and_score_live_jobs(self, matches: list[dict], limit: int = 10) -> list[Job]:
         with self._lock:
             records: list[dict] = []
-            for item in matches:
+            for index, item in enumerate(matches, start=1):
                 job_id = str(item.get("id") or item.get("external_id") or "").strip()
                 title = str(item.get("title") or "").strip()
                 company = str(item.get("company") or "").strip()
@@ -363,6 +374,9 @@ class Store:
                     "apply_url": item.get("apply_url"),
                     "description": item.get("description"),
                     "similarity": item.get("similarity"),
+                    "semantic_score": item.get("semantic_score"),
+                    "ranking_score": item.get("ranking_score"),
+                    "rank": item.get("rank") or index,
                     "xano_id": item.get("xano_id"),
                     "_origin": "live",
                 }
@@ -371,7 +385,8 @@ class Store:
             self._live_active = True
             self._rebuild_index()
             jobs = [self._score(record) for record in records]
-            jobs.sort(key=lambda job: -(job.scorecard.match_percent if job.scorecard else 0))
+            # Keep the AI retrieval order. Lexical match_percent is explanatory,
+            # not a second ranking pass that can reshuffle the requested N.
             return jobs[:limit]
 
     # ----- targeting / applications ---------------------------------------
